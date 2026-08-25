@@ -1,3 +1,4 @@
+begin;
 
 -- Day 1 smoke-test content.
 -- It is copied to all 8 learner segments so every account can test the flow.
@@ -42,3 +43,5 @@ select
   )
 from upserted w cross join segments s
 on conflict(lesson_id,learner_type,position) do update set word_id=excluded.word_id;
+
+commit;

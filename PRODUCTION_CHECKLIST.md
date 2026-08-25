@@ -1,18 +1,22 @@
-# Production checklist
+# Production Checklist
 
-- [ ] Run `supabase/schema.sql`
-- [ ] Run `supabase/seed.sql` for smoke test
-- [ ] Create production admin user and set `profiles.role='admin'`
-- [ ] Import and QA 8 × 100 × 10 curriculum
-- [ ] Run `npm run validate:curriculum`
-- [ ] Configure Supabase Site URL / Redirect URLs
-- [ ] Configure production SMTP
-- [ ] Configure Vercel environment variables
-- [ ] Configure custom domain
-- [ ] Enable Supabase backups/PITR appropriate to plan
-- [ ] Add monitoring/error tracking DSN
-- [ ] Add privacy/terms/children-data consent requirements as applicable
-- [ ] Run GitHub CI green
-- [ ] Smoke test signup → onboarding → Day 1 → quiz → review → history
-- [ ] Verify future-day content is inaccessible via Supabase Data API
-- [ ] Upgrade Next.js to the August 26, 2026 security patch (or later) before public traffic
+- [ ] Run `supabase/schema.sql` successfully in Supabase SQL Editor.
+- [ ] Optionally run `supabase/seed.sql` and test Day 1 end-to-end.
+- [ ] Set `NEXT_PUBLIC_SUPABASE_URL` in Vercel.
+- [ ] Set `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in Vercel.
+- [ ] Set `NEXT_PUBLIC_SITE_URL` to the canonical production domain.
+- [ ] Do not configure a service-role key in the frontend/Vercel app.
+- [ ] Configure Supabase Auth Site URL and Redirect URLs.
+- [ ] Verify `/api/health` returns HTTP 200 and `supabase.ok=true`.
+- [ ] Register a test learner and complete onboarding.
+- [ ] Verify Day 2 is locked on Day 1.
+- [ ] Verify direct future `lesson_words` reads are blocked by RLS.
+- [ ] Complete Day 1 quiz and confirm `lesson_progress`, `quiz_attempts`, `user_word_progress` rows.
+- [ ] Test `/review` after review items become due.
+- [ ] Promote one known account to admin using SQL Editor only.
+- [ ] Import one Day through `/admin`; confirm exactly 10 words and atomic replacement.
+- [ ] Load/validate production curriculum before launch.
+- [ ] Configure custom SMTP before meaningful user volume; review Supabase Auth email rate limits.
+- [ ] Enable CAPTCHA/abuse protection for public launch if signup abuse is a concern.
+- [ ] Run `npm run typecheck`, `npm run lint`, `npm run build` locally/CI.
+- [ ] Confirm repository has no `postcss.config.*`, Tailwind config, `.env.local`, or secrets.

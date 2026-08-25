@@ -1,177 +1,201 @@
-# ImYoVo100 — production-ready application baseline
+# ImYoVo100 — 1,000 English Words in 100 Days
 
-Web app học 1.000 từ tiếng Anh trong 100 ngày, xây bằng Next.js + Supabase.
+Production-oriented Next.js + Supabase web app for a locked 100-day vocabulary journey.
 
-## Tính năng
-- Supabase Auth email/password, SSR session bằng cookies.
-- Onboarding và 8 nhóm: Tiền tiểu học, Tiểu học, THCS, THPT, Đại học, Sau đại học, Đi làm, Người lớn tuổi.
-- Enrollment 100 ngày; Day tương lai khóa ở database.
-- Curriculum tách theo `learner_type`: cùng Day có thể có 10 từ khác nhau cho từng nhóm.
-- Flashcard + Quiz 10 câu/ngày.
-- Database tự chấm Quiz; browser không được tự khai báo đáp án đúng.
-- Progress, best score, attempts, streak, history.
-- Spaced repetition theo từng từ và review queue.
-- RLS cho toàn bộ bảng public.
-- Không cho user tự sửa `role` hoặc `started_on`.
-- Admin import curriculum theo Day + nhóm người học.
-- Service role chỉ nằm server-side.
-- Vercel-ready.
+## Stack
 
-## 1. Supabase
+- Next.js 16 App Router + React 19 + TypeScript
+- Supabase Auth + Postgres + Row Level Security + RPC
+- Plain CSS (no Tailwind/PostCSS dependency)
+- Vercel deployment
 
-Tạo project Supabase. Trong SQL Editor chạy:
+## What is implemented
 
-```text
-supabase/schema.sql
-supabase/seed.sql
-```
+- Email/password sign-up, sign-in, confirmation callback, sign-out
+- Password reset flow with PKCE callback
+- SSR cookie sessions with `@supabase/ssr` and Next.js `proxy.ts`
+- 8 learner segments: preschool, primary, THCS, THPT, university, postgraduate, working adults, seniors
+- 100-day time-gated roadmap
+- 10 words/day segmented curriculum
+- Flashcards + daily quiz
+- Quiz scoring inside Postgres RPC (browser cannot self-report correctness)
+- Study history and progress
+- Spaced-repetition review queue
+- Admin curriculum import through an atomic, role-checked database RPC
+- RLS blocks future lesson vocabulary at the Data API layer
+- `/api/health` checks live Supabase Auth connectivity without exposing secrets
+- GitHub Actions: typecheck + lint + production build
 
-`schema.sql` tạo 100 Lesson. `seed.sql` chỉ có 10 từ Day 1 dùng để smoke test và copy cho 8 nhóm.
+## 1. Supabase setup
 
-### Cấp quyền Admin
+Create a Supabase project, then open **SQL Editor** and run these files in order:
 
-Sau khi user đã đăng ký:
+1. `supabase/schema.sql`
+2. `supabase/seed.sql` (optional smoke-test content for Day 1)
+3. `supabase/verify.sql` (verification; every row should be `PASS`)
+
+The schema creates the course and all 100 lesson shells automatically.
+
+### Make the first account an admin
+
+Register the account normally first. Then run this once in Supabase SQL Editor, replacing the email:
 
 ```sql
-update public.profiles
+update public.profiles p
 set role = 'admin'
-where id = '<AUTH_USER_UUID>';
+from auth.users u
+where p.id = u.id
+  and u.email = 'YOUR_EMAIL@example.com';
 ```
 
-Không có API learner-facing nào cho phép tự nâng quyền Admin.
+Users cannot promote themselves through the public API because profiles have no client update policy.
 
 ## 2. Environment variables
 
-Copy `.env.example` thành `.env.local`:
+Copy `.env.example` to `.env.local`:
+
+```bash
+cp .env.example .env.local
+```
+
+Required:
 
 ```env
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
-NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
-SUPABASE_SERVICE_ROLE_KEY=xxx
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` tuyệt đối không có prefix `NEXT_PUBLIC_`.
+For older projects, `NEXT_PUBLIC_SUPABASE_ANON_KEY` is supported as a fallback to the publishable key.
 
-## 3. Supabase Auth URL Configuration
+Do **not** add a Supabase service-role key to this app. It is not needed.
 
-Development:
+Run configuration checks:
 
-```text
-Site URL: http://localhost:3000
-Redirect URL: http://localhost:3000/auth/callback
+```bash
+npm run check:env
+npm run check:supabase
 ```
 
-Production thêm:
+`check:supabase` calls the official Supabase Auth health endpoint and fails clearly if URL/key/network is wrong.
 
-```text
-https://<your-domain>/auth/callback
-```
+## 3. Supabase Auth URL configuration
 
-## 4. Chạy local
+In **Supabase → Authentication → URL Configuration**:
+
+### Local
+
+- Site URL: `http://localhost:3000`
+- Redirect URL: `http://localhost:3000/**`
+
+### Production
+
+Set Site URL to the canonical Vercel/custom domain, e.g.:
+
+- `https://imyovo100.vercel.app`
+
+Add an exact production redirect URL:
+
+- `https://imyovo100.vercel.app/**`
+
+If Vercel Preview deployments need auth, add the appropriate Vercel preview wildcard for your team/account as documented by Supabase.
+
+The application uses these callback routes:
+
+- `/auth/callback` — email confirmation + PKCE exchange
+- `/auth/callback?next=/auth/update-password` — password recovery
+
+## 4. Local development
 
 ```bash
 npm install
-npm run typecheck
-npm run build
+npm run check:env
+npm run check:supabase
 npm run dev
 ```
 
-## 5. Quy tắc khóa Day
+Open `http://localhost:3000`.
 
-`enrollments.started_on` chỉ được tạo bởi RPC `complete_onboarding_and_start()`, sử dụng `current_date` của database.
+## 5. Production verification
 
-`get_course_access()` tính:
+Before pushing/deploying:
 
-```text
-available_day = current_date - started_on + 1
+```bash
+npm run typecheck
+npm run lint
+npm run build
 ```
 
-và giới hạn 1..100.
+There is intentionally **no** `postcss.config.*` and **no** Tailwind dependency. This prevents the previous Vercel error:
 
-RLS của `words` và `lesson_words` chỉ cho đọc nội dung thuộc Day đã mở và đúng `learner_type`.
+```text
+Cannot find module 'tailwindcss'
+```
 
-`submit_daily_quiz()` tiếp tục kiểm tra Day ở database trước khi ghi progress.
+## 6. Vercel
 
-Do đó:
-- sửa JavaScript frontend không mở được Day tương lai;
-- gọi Data API trực tiếp cũng không đọc được word content tương lai;
-- tự gửi `correct=true` không gian lận được Quiz.
+Import the GitHub repository into Vercel and configure:
 
-## 6. Curriculum 100 ngày × 8 nhóm
+```env
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+NEXT_PUBLIC_SITE_URL=https://YOUR_PRODUCTION_DOMAIN
+```
 
-Admin truy cập `/admin` để import một payload:
+Then deploy. After deployment verify:
+
+```text
+https://YOUR_DOMAIN/api/health
+```
+
+Healthy response should contain:
 
 ```json
 {
-  "dayNumber": 1,
-  "learnerType": "working",
-  "title": "Day 1 — Daily Routine",
-  "theme": "Daily Routine",
-  "words": [
-    {
-      "term": "commute",
-      "ipa": "/kəˈmjuːt/",
-      "meaning_vi": "đi lại giữa nhà và nơi làm việc",
-      "part_of_speech": "verb",
-      "example_en": "I commute by bus.",
-      "example_vi": "Tôi đi làm bằng xe buýt."
-    }
-  ]
+  "ok": true,
+  "supabase": { "ok": true, "status": 200 }
 }
 ```
 
-`words` bắt buộc đúng 10 item.
+## 7. Security model
 
-Production launch cần QA đủ:
-- 100 Day
-- × 8 learner segments
-- × 10 từ/Day
+### Day locking
 
-Có thể tái sử dụng một word giữa nhiều nhóm/Day.
+The current available day is calculated from the server/database using the enrollment start date and the user's stored IANA timezone. Future content is not merely hidden in the UI: RLS on `lesson_words` and `words` prevents reading future vocabulary via direct Supabase Data API calls.
 
-## 7. Spaced repetition
+### Sensitive writes
 
-Sau Quiz, database cập nhật:
-- `repetitions`
-- `interval_days`
-- `ease_factor`
-- `correct_count`
-- `wrong_count`
-- `next_review_at`
+Learners have SELECT-only table privileges through RLS. Mutations use narrowly scoped RPC functions:
 
-Các từ đến hạn xuất hiện ở `/review`.
+- `complete_onboarding_and_start`
+- `submit_daily_quiz`
+- `submit_word_review`
+- `admin_import_lesson`
 
-## 8. Deploy Vercel
+`admin_import_lesson` checks `profiles.role = 'admin'` inside a `SECURITY DEFINER` transaction.
 
-1. Push repo lên GitHub.
-2. Import repo trong Vercel.
-3. Set 4 environment variables.
-4. Deploy.
-5. Cập nhật Supabase Site URL + Redirect URL sang domain Vercel/custom domain.
+### Quiz integrity
 
-## 9. Git
+The browser submits `wordId + selectedMeaning`. PostgreSQL resolves the expected answer from the learner's actual lesson and calculates the score itself.
+
+## 8. Curriculum
+
+`supabase/seed.sql` only adds Day 1 smoke-test content for all learner segments. Before public launch, load production content for all days/segments using `/admin`.
+
+Each learner segment requires:
+
+```text
+100 days × 10 words = 1,000 lesson-word assignments
+```
+
+Words can be reused across segments, so the `words` table does not necessarily need 8,000 unique rows.
+
+## 9. GitHub
 
 ```bash
-git add .
-git commit -m "feat: production-ready ImYoVo100 baseline"
+git add -A
+git commit -m "fix: production-ready Supabase and Vercel build"
 git push origin main
 ```
 
-## 10. Checklist trước public launch
-
-Codebase đã có các guard chính cho production, nhưng các hạng mục phụ thuộc tài khoản/dữ liệu bên ngoài vẫn cần hoàn thiện:
-
-- QA toàn bộ curriculum 100 × 8 × 10.
-- Nguồn audio phát âm có bản quyền/quyền sử dụng.
-- SMTP production cho email xác nhận/reset password.
-- Custom domain.
-- Monitoring/error tracking (Sentry hoặc dịch vụ tương đương).
-- Privacy Policy / Terms / consent nếu thu thập dữ liệu trẻ em.
-- Backup/restore policy cho Supabase.
-- E2E test trên production-like environment.
-
-
-## Dependency note — 25/08/2026
-
-Project đang dùng dải Next.js `^16.3.2` và Supabase SSR `^0.12.5`. Next.js đã thông báo bản vá bảo mật theo lịch vào 26/08/2026; hãy chạy `npm update next` và deploy lại trước khi mở public traffic.
+The included GitHub Actions workflow verifies typecheck, lint and build on pushes/PRs.

@@ -1,3 +1,4 @@
+begin;
 
 create extension if not exists pgcrypto;
 
@@ -146,6 +147,10 @@ create policy "quiz own read" on public.quiz_attempts for select using(auth.uid(
 drop policy if exists "word progress own read" on public.user_word_progress;
 create policy "word progress own read" on public.user_word_progress for select using(auth.uid()=user_id);
 
+-- Explicit API privileges: learners read through RLS and write only through RPCs.
+revoke insert,update,delete on public.profiles,public.courses,public.enrollments,public.lessons,public.words,public.lesson_words,public.lesson_progress,public.quiz_attempts,public.user_word_progress from anon,authenticated;
+grant select on public.profiles,public.courses,public.enrollments,public.lessons,public.words,public.lesson_words,public.lesson_progress,public.quiz_attempts,public.user_word_progress to authenticated;
+
 -- Word content is visible only when it is part of an unlocked lesson for the
 -- user's learner segment, or the word is already in that user's review queue.
 drop policy if exists "unlocked words read" on public.words;
@@ -177,7 +182,7 @@ create policy "unlocked lesson words read" on public.lesson_words for select to 
 );
 
 create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path=public as $$
+returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
 begin
   insert into public.profiles(id,display_name)
   values(new.id,coalesce(new.raw_user_meta_data->>'display_name',''))
@@ -194,12 +199,14 @@ create or replace function public.complete_onboarding_and_start(
   p_display_name text,
   p_learner_type public.learner_type,
   p_timezone text
-) returns jsonb language plpgsql security definer set search_path=public as $$
+) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare v_course uuid;
 begin
   if auth.uid() is null then raise exception 'UNAUTHORIZED'; end if;
   select id into v_course from public.courses where slug=p_course_slug and active=true;
   if v_course is null then raise exception 'COURSE_NOT_FOUND'; end if;
+  if not exists(select 1 from pg_timezone_names where name=p_timezone) then raise exception 'INVALID_TIMEZONE'; end if;
+  if length(trim(p_display_name))<2 then raise exception 'INVALID_DISPLAY_NAME'; end if;
 
   update public.profiles
   set display_name=left(trim(p_display_name),80),
@@ -217,7 +224,7 @@ begin
 end $$;
 
 create or replace function public.get_course_access(p_course_id uuid)
-returns jsonb language plpgsql security definer set search_path=public as $$
+returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare e public.enrollments%rowtype; v_available int; v_completed int; v_streak int:=0; v_day int;
 begin
   if auth.uid() is null then raise exception 'UNAUTHORIZED'; end if;
@@ -250,7 +257,7 @@ create or replace function public.submit_daily_quiz(
   p_course_id uuid,
   p_day_number int,
   p_answers jsonb
-) returns jsonb language plpgsql security definer set search_path=public as $$
+) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare
   e public.enrollments%rowtype;
   p public.profiles%rowtype;
@@ -361,13 +368,14 @@ grant execute on function public.submit_daily_quiz(uuid,int,jsonb) to authentica
 
 
 create or replace function public.submit_word_review(p_word_id uuid,p_quality int)
-returns jsonb language plpgsql security definer set search_path=public as $$
+returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare uw public.user_word_progress%rowtype; v_interval int; v_ease numeric; v_rep int;
 begin
   if auth.uid() is null then raise exception 'UNAUTHORIZED'; end if;
   if p_quality<0 or p_quality>5 then raise exception 'INVALID_QUALITY'; end if;
   select * into uw from public.user_word_progress where user_id=auth.uid() and word_id=p_word_id;
   if not found then raise exception 'WORD_NOT_IN_REVIEW_QUEUE'; end if;
+  if uw.next_review_at>now() then raise exception 'WORD_NOT_DUE_YET'; end if;
 
   if p_quality<3 then
     v_rep:=0; v_interval:=1; v_ease:=greatest(1.30,uw.ease_factor-0.20);
@@ -390,6 +398,79 @@ end $$;
 revoke all on function public.submit_word_review(uuid,int) from public;
 grant execute on function public.submit_word_review(uuid,int) to authenticated;
 
+
+
+create or replace function public.admin_import_lesson(
+  p_course_slug text,
+  p_day_number int,
+  p_title text,
+  p_theme text,
+  p_learner_type public.learner_type,
+  p_words jsonb
+) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
+declare
+  v_course uuid;
+  v_lesson uuid;
+  v_role public.app_role;
+  v_count int;
+  v_item jsonb;
+  v_word uuid;
+  v_position int:=0;
+begin
+  if auth.uid() is null then raise exception 'UNAUTHORIZED'; end if;
+  select role into v_role from public.profiles where id=auth.uid();
+  if v_role is distinct from 'admin'::public.app_role then raise exception 'FORBIDDEN'; end if;
+  if p_day_number<1 or p_day_number>100 then raise exception 'INVALID_DAY'; end if;
+  if nullif(trim(p_title),'') is null or nullif(trim(p_theme),'') is null then raise exception 'INVALID_LESSON'; end if;
+
+  select count(*) into v_count from jsonb_array_elements(p_words);
+  if v_count<>10 then raise exception 'LESSON_MUST_HAVE_10_WORDS'; end if;
+
+  select id into v_course from public.courses where slug=p_course_slug and active=true;
+  if v_course is null then raise exception 'COURSE_NOT_FOUND'; end if;
+
+  insert into public.lessons(course_id,day_number,title,theme)
+  values(v_course,p_day_number,left(trim(p_title),120),left(trim(p_theme),120))
+  on conflict(course_id,day_number) do update set title=excluded.title,theme=excluded.theme
+  returning id into v_lesson;
+
+  delete from public.lesson_words where lesson_id=v_lesson and learner_type=p_learner_type;
+
+  for v_item in select * from jsonb_array_elements(p_words)
+  loop
+    v_position:=v_position+1;
+    if nullif(trim(v_item->>'term'),'') is null or nullif(trim(v_item->>'meaning_vi'),'') is null then
+      raise exception 'INVALID_WORD_AT_POSITION_%',v_position;
+    end if;
+
+    insert into public.words(term,ipa,meaning_vi,part_of_speech,example_en,example_vi,audio_url)
+    values(
+      left(trim(v_item->>'term'),80),
+      nullif(left(coalesce(v_item->>'ipa',''),120),''),
+      left(trim(v_item->>'meaning_vi'),240),
+      nullif(left(coalesce(v_item->>'part_of_speech',''),40),''),
+      nullif(left(coalesce(v_item->>'example_en',''),500),''),
+      nullif(left(coalesce(v_item->>'example_vi',''),500),''),
+      nullif(left(coalesce(v_item->>'audio_url',''),1000),'')
+    )
+    on conflict(term,meaning_vi) do update set
+      ipa=excluded.ipa,
+      part_of_speech=excluded.part_of_speech,
+      example_en=excluded.example_en,
+      example_vi=excluded.example_vi,
+      audio_url=excluded.audio_url
+    returning id into v_word;
+
+    insert into public.lesson_words(lesson_id,learner_type,word_id,position)
+    values(v_lesson,p_learner_type,v_word,v_position);
+  end loop;
+
+  return jsonb_build_object('ok',true,'lesson_id',v_lesson,'day_number',p_day_number,'learner_type',p_learner_type);
+end $$;
+
+revoke all on function public.admin_import_lesson(text,int,text,text,public.learner_type,jsonb) from public;
+grant execute on function public.admin_import_lesson(text,int,text,text,public.learner_type,jsonb) to authenticated;
+
 insert into public.courses(slug,title,description,total_days,words_per_day)
 values('english-1000-in-100-days','1.000 từ tiếng Anh trong 100 ngày','10 từ mỗi ngày, mở khóa theo ngày.',100,10)
 on conflict(slug) do update set title=excluded.title,description=excluded.description,active=true;
@@ -409,3 +490,5 @@ select c.id,d,'Day '||d,case
 from public.courses c cross join generate_series(1,100) d
 where c.slug='english-1000-in-100-days'
 on conflict(course_id,day_number) do nothing;
+
+commit;
