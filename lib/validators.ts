@@ -1,0 +1,5 @@
+import {z} from "zod";
+export const onboardingSchema=z.object({display_name:z.string().trim().min(2).max(80),learner_type:z.enum(["preschool","primary","middle_school","high_school","university","postgraduate","working","senior"]),timezone:z.string().min(1).max(64)});
+export const quizSubmissionSchema=z.object({dayNumber:z.number().int().min(1).max(100),answers:z.array(z.object({wordId:z.string().uuid(),selectedMeaning:z.string().min(1).max(240)})).length(10)});
+export const importCurriculumSchema=z.object({dayNumber:z.number().int().min(1).max(100),title:z.string().min(1).max(120),theme:z.string().min(1).max(120),words:z.array(z.object({term:z.string().min(1).max(80),ipa:z.string().max(120).optional().nullable(),meaning_vi:z.string().min(1).max(240),example_en:z.string().max(500).optional().nullable(),example_vi:z.string().max(500).optional().nullable(),part_of_speech:z.string().max(40).optional().nullable(),audio_url:z.string().url().optional().nullable()})).length(10)});
+export const reviewSubmissionSchema=z.object({wordId:z.string().uuid(),quality:z.number().int().min(0).max(5)});

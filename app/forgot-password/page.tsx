@@ -1,0 +1,1 @@
+import ForgotPasswordForm from "@/components/ForgotPasswordForm";export default function Page(){return <main className="container" style={{minHeight:"100vh",display:"grid",placeItems:"center",padding:"30px 0"}}><ForgotPasswordForm/></main>}

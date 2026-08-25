@@ -1,20 +1,5 @@
-export type LearnerType =
-  | "preschool" | "primary" | "middle_school" | "high_school"
-  | "university" | "postgraduate" | "working" | "senior";
-
-export type Profile = {
-  id: string; display_name: string | null; learner_type: LearnerType;
-  learning_start_date: string | null; timezone: string;
-};
-
-export type Word = {
-  id: string; word: string; ipa: string | null; meaning_vi: string;
-  example_en: string | null; example_vi: string | null; audio_url: string | null;
-};
-
-export function getAvailableDay(start: string | null, now = new Date()) {
-  if (!start) return 0;
-  const s = new Date(start + "T00:00:00");
-  const n = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.max(0, Math.floor((n.getTime()-s.getTime())/86400000)+1);
-}
+export const learnerTypes=[["preschool","Tiền tiểu học"],["primary","Tiểu học"],["middle_school","THCS"],["high_school","THPT"],["university","Đại học"],["postgraduate","Sau đại học"],["working","Đi làm"],["senior","Người lớn tuổi"]] as const;
+export type LearnerType=(typeof learnerTypes)[number][0];
+export type AppRole="learner"|"admin";
+export type VocabularyWord={id:string;term:string;ipa:string|null;meaning_vi:string;example_en:string|null;example_vi:string|null;audio_url:string|null;part_of_speech:string|null};
+export type LessonWord={position:number;word:VocabularyWord};
